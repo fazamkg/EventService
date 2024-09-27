@@ -114,8 +114,6 @@ public class EventService : MonoBehaviour
 
 		using (var request = UnityWebRequest.Post(_serverUrl, json))
 		{
-			request.timeout = (int)_cooldownBeforeSend;
-
 			yield return request.SendWebRequest();
 
 			if (request.responseCode == 200 ||
