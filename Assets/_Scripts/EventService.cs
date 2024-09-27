@@ -6,6 +6,17 @@ using System;
 using Newtonsoft.Json;
 
 [Serializable]
+public class Events
+{
+	public Event[] events;
+
+	public Events(Event[] events)
+	{
+		this.events = events;
+	}
+}
+
+[Serializable]
 public class Event
 {
 	public string type;
@@ -24,12 +35,18 @@ public class EventService : MonoBehaviour
 
 	[SerializeField] private string _serverUrl;
 	[SerializeField] private float _cooldownBeforeSend;
+	[SerializeField] private bool _fake200Response;
 
 	private Queue<Event> _eventQueue;
 	private float _currentCooldown;
+	private bool _requestInProcess;
+
+	public static EventService Instance { get; private set; }
 
 	private void Awake()
 	{
+		Instance = this;
+
 		var loadedEventQueue = PlayerPrefs.GetString(EventQueuePref);
 
 		if (string.IsNullOrEmpty(loadedEventQueue) == false)
@@ -54,10 +71,12 @@ public class EventService : MonoBehaviour
 	{
 		_currentCooldown = Mathf.MoveTowards(_currentCooldown, 0f, Time.unscaledDeltaTime);
 
-		if (Mathf.Approximately(_currentCooldown, 0f) && _eventQueue.Count > 0)
+		if (Mathf.Approximately(_currentCooldown, 0f) &&
+			_eventQueue.Count > 0 &&
+			_requestInProcess == false)
 		{
-			StartCoroutine((IEnumerator)SendEventCoroutine());
 			_currentCooldown = _cooldownBeforeSend;
+			StartCoroutine(SendEventsCoroutine());
 		}
 	}
 
@@ -67,29 +86,50 @@ public class EventService : MonoBehaviour
 
 		var queueJson = JsonConvert.SerializeObject(_eventQueue);
 		PlayerPrefs.SetString(EventQueuePref, queueJson);
+
+		Debug.Log($"Enqueue: {_eventQueue.Count}");
 	}
 
-	private void Dequeue()
+	private void DequeueAmount(int amount)
 	{
-		_eventQueue.Dequeue();
+		for (var i = 0; i < amount; i++)
+		{
+			_eventQueue.Dequeue();
+		}
 
 		var queueJson = JsonConvert.SerializeObject(_eventQueue);
 		PlayerPrefs.SetString(EventQueuePref, queueJson);
+
+		Debug.Log($"Dequeue: {_eventQueue.Count}");
 	}
 
-	private IEnumerable SendEventCoroutine()
+	private IEnumerator SendEventsCoroutine()
 	{
-		var @event = _eventQueue.Peek();
+		_requestInProcess = true;
 
-		var json = JsonConvert.SerializeObject(@event);
-		var request = UnityWebRequest.Post(_serverUrl, json);
+		var eventsArray = _eventQueue.ToArray();
+		var events = new Events(eventsArray);
 
-		yield return request.SendWebRequest();
+		var json = JsonConvert.SerializeObject(events);
 
-		if (request.responseCode == 200)
+		using (var request = UnityWebRequest.Post(_serverUrl, json))
 		{
-			Dequeue();
+			request.timeout = (int)_cooldownBeforeSend;
+
+			yield return request.SendWebRequest();
+
+			if (request.responseCode == 200 ||
+				_fake200Response)
+			{
+				DequeueAmount(eventsArray.Length);
+			}
+			else
+			{
+				Debug.LogError($"Request error: {request.responseCode}");
+			}
 		}
+
+		_requestInProcess = false;
 	}
 
 	public void TrackEvent(string type, string data)
